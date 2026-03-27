@@ -79,9 +79,10 @@ public class TestDataGenerator {
         generirajRacune(db, artikli);
         generirajNabave(db, artikli, dobavljaci);
         generirajPovrate(db, artikli, dobavljaci);
+        generirajKomisijaObracune(db, dobavljaci);
     }
 
-    /** Generira 50 dobavljača. */
+    /** Generira 50 dobavljača — polovica s komisijskim modelom. */
     private static List<Dobavljac> generirajDobavljace(DatabaseManager db) throws SQLException {
         List<Dobavljac> lista = new ArrayList<>();
         for (int i = 0; i < DOBAVLJACI_NAZIVI.length; i++) {
@@ -92,6 +93,7 @@ public class TestDataGenerator {
             d.setEmail("info@" + DOBAVLJACI_NAZIVI[i].toLowerCase()
                 .replaceAll("[^a-z]", "").substring(0, Math.min(8, DOBAVLJACI_NAZIVI[i].length())) + ".hr");
             d.setTelefon("0" + (91 + RND.nextInt(9)) + "-" + (1000000 + RND.nextInt(9000000)));
+            d.setKomisijskiModel(i % 2 == 0); // svaki parni dobavljač nudi komisijsku prodaju
             db.saveDobavljac(d);
             lista.add(d);
         }
@@ -102,7 +104,6 @@ public class TestDataGenerator {
     private static List<Artikl> generirajArtikle(DatabaseManager db,
                                                    List<Dobavljac> dobavljaci) throws SQLException {
         List<Artikl> lista = new ArrayList<>();
-        int barkodSeq = 3850000000001L > 0 ? 1 : 0; // dummy
         for (int i = 0; i < 200; i++) {
             String kat = KATEGORIJE[i % KATEGORIJE.length];
             String boja = BOJE[i % BOJE.length];
@@ -182,12 +183,20 @@ public class TestDataGenerator {
                                           List<Dobavljac> dobavljaci) throws SQLException {
         for (int i = 0; i < 200; i++) {
             Artikl a = artikli.get(RND.nextInt(artikli.size()));
-            PovratRobe.TipPovrata tip = RND.nextBoolean()
-                ? PovratRobe.TipPovrata.OD_KUPCA : PovratRobe.TipPovrata.DOBAVLJACU;
+            int kolicina = 1 + RND.nextInt(3);
+            // Provjeri zalihu — povrat dobavljaču smanjuje zalihu, mora biti dovoljno
+            Artikl svjezi = db.getArtiklById(a.getId());
+            PovratRobe.TipPovrata tip;
+            if (svjezi == null || svjezi.getKolicinaNaSkladistu() < kolicina) {
+                tip = PovratRobe.TipPovrata.OD_KUPCA; // povećava zalihu — uvijek sigurno
+            } else {
+                tip = RND.nextBoolean()
+                    ? PovratRobe.TipPovrata.OD_KUPCA : PovratRobe.TipPovrata.DOBAVLJACU;
+            }
             PovratRobe p = new PovratRobe();
             p.setArtiklId(a.getId());
             p.setArtiklNaziv(a.getNaziv());
-            p.setKolicina(1 + RND.nextInt(3));
+            p.setKolicina(kolicina);
             p.setCijenaPoKomadu(a.getCijena());
             p.setTipPovrata(tip);
             p.setVrijemePovrata(LocalDateTime.now()
@@ -209,5 +218,54 @@ public class TestDataGenerator {
         Random r = new Random(seed * 31L + 7);
         for (int i = 0; i < 11; i++) sb.append(r.nextInt(10));
         return sb.toString();
+    }
+
+    /**
+     * Generira komisijske nabave za zadnjih 6 mjeseci (samo za komisijske dobavljače)
+     * i automatski sprema obračune za svaki završeni mjesec.
+     * Svaki komisijski dobavljač dobiva 3-8 nabava po mjesecu.
+     */
+    private static void generirajKomisijaObracune(DatabaseManager db,
+                                                   List<Dobavljac> dobavljaci) throws SQLException {
+        List<Dobavljac> komisijski = dobavljaci.stream()
+            .filter(Dobavljac::isKomisijskiModel).toList();
+        List<Artikl> sviArtikli = db.getArtikli();
+
+        java.time.LocalDate danas = java.time.LocalDate.now();
+
+        // Generiraj nabave i obračune za zadnjih 6 završenih mjeseci
+        for (int mOffset = 6; mOffset >= 1; mOffset--) {
+            java.time.YearMonth ym = java.time.YearMonth.from(danas).minusMonths(mOffset);
+            int godina = ym.getYear();
+            int mjesec = ym.getMonthValue();
+            // Sredina mjeseca za nabave
+            LocalDateTime vrijemeNabave = LocalDateTime.of(godina, mjesec, 10, 9, 0);
+
+            for (Dobavljac d : komisijski) {
+                // 3-5 različitih artikala po dobavljaču po mjesecu
+                int brArtikala = 3 + RND.nextInt(3);
+                List<Artikl> odabrani = new ArrayList<>();
+                for (int i = 0; i < brArtikala; i++)
+                    odabrani.add(sviArtikli.get(RND.nextInt(sviArtikli.size())));
+                odabrani = odabrani.stream().distinct().toList();
+
+                for (Artikl a : odabrani) {
+                    Nabava n = new Nabava();
+                    n.setArtiklId(a.getId());
+                    n.setArtiklNaziv(a.getNaziv());
+                    n.setDobavljacId(d.getId());
+                    n.setDobavljacNaziv(d.getNaziv());
+                    n.setKolicina(5 + RND.nextInt(16)); // 5-20 kom
+                    n.setNabavnaCijena(Math.round(a.getCijena() * 0.5 * 100.0) / 100.0);
+                    n.setVrijemeNabave(vrijemeNabave);
+                    n.setNapomena("Komisija " + ym);
+                    db.saveNabava(n);
+                }
+
+                // Spremi obračun za taj mjesec
+                var stavke = db.generirajKomisijaObracun(d.getId(), godina, mjesec);
+                if (!stavke.isEmpty()) db.spremiKomisijaObracun(d, godina, mjesec, stavke);
+            }
+        }
     }
 }

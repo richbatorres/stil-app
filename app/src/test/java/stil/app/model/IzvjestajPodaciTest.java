@@ -55,7 +55,6 @@ class IzvjestajPodaciTest {
     @Test
     void setteri_RadeTocno() {
         IzvjestajPodaci p = new IzvjestajPodaci();
-        p.setNaslov("Test izvještaj");
         p.setRazdobljeOd("2024-01-01T00:00:00");
         p.setRazdobljeDo("2024-01-31T23:59:59");
         p.setBrojRacuna(42);
@@ -66,7 +65,6 @@ class IzvjestajPodaciTest {
         p.setProdajaKartica(400.00);
         p.setIznosPovratDobavljacu(50.00);
 
-        assertEquals("Test izvještaj", p.getNaslov());
         assertEquals("2024-01-01T00:00:00", p.getRazdobljeOd());
         assertEquals("2024-01-31T23:59:59", p.getRazdobljeDo());
         assertEquals(42, p.getBrojRacuna());

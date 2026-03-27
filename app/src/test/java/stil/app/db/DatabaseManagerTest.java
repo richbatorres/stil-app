@@ -945,4 +945,132 @@ class DatabaseManagerTest {
     void getArtiklById_VracaNullZaNepostojeci() throws Exception {
         assertNull(db().getArtiklById(99999));
     }
+
+    // -------------------------------------------------------------------------
+    // KOMISIJA testovi
+    // -------------------------------------------------------------------------
+
+    @Test
+    void getKomisijskiDobavljaci_VracaSamoKomisijske() throws Exception {
+        Dobavljac d1 = new Dobavljac("Komisijski", null, null, null, null);
+        d1.setKomisijskiModel(true);
+        Dobavljac d2 = new Dobavljac("Obicni", null, null, null, null);
+        d2.setKomisijskiModel(false);
+        db().saveDobavljac(d1);
+        db().saveDobavljac(d2);
+
+        List<Dobavljac> lista = db().getKomisijskiDobavljaci();
+        assertEquals(1, lista.size());
+        assertEquals("Komisijski", lista.get(0).getNaziv());
+        assertTrue(lista.get(0).isKomisijskiModel());
+    }
+
+    @Test
+    void generirajKomisijaObracun_PraznoAkoNemaNabava() throws Exception {
+        Dobavljac d = new Dobavljac("Kom Dob", null, null, null, null);
+        d.setKomisijskiModel(true);
+        db().saveDobavljac(d);
+
+        List<KomisijaStavka> stavke = db().generirajKomisijaObracun(d.getId(), 2024, 5);
+        assertTrue(stavke.isEmpty());
+    }
+
+    @Test
+    void generirajKomisijaObracun_TocnoRacunaNabavljenoIProdano() throws Exception {
+        Dobavljac d = new Dobavljac("Kom Dob2", null, null, null, null);
+        d.setKomisijskiModel(true);
+        db().saveDobavljac(d);
+
+        Artikl a = new Artikl("Kom Artikl", "KOM001", 50.00, 25.0, 0);
+        db().saveArtikl(a);
+
+        // Nabava 10 kom u komisiju u svibnju
+        Nabava n = new Nabava(a.getId(), a.getNaziv(), 10, 20.00, null);
+        n.setDobavljacId(d.getId());
+        n.setDobavljacNaziv(d.getNaziv());
+        n.setVrijemeNabave(LocalDateTime.of(2024, 5, 5, 9, 0, 0));
+        db().saveNabava(n);
+
+        // Prodano 4 kom u svibnju
+        Racun r = buildRacun(1, Racun.NacinPlacanja.GOTOVINA);
+        r.setVrijemeIzdavanja(LocalDateTime.of(2024, 5, 10, 10, 0, 0));
+        r.getStavke().add(new StavkaRacuna(a, 4, 0.0));
+        db().saveRacun(r);
+
+        List<KomisijaStavka> stavke = db().generirajKomisijaObracun(d.getId(), 2024, 5);
+        assertEquals(1, stavke.size());
+        assertEquals(10, stavke.get(0).getNabavljeno());
+        assertEquals(4, stavke.get(0).getProdano());
+        assertEquals(6, stavke.get(0).getOstalo());
+    }
+
+    @Test
+    void generirajKomisijaObracun_ProdanoNePrelaziNabavljeno() throws Exception {
+        Dobavljac d = new Dobavljac("Kom Dob3", null, null, null, null);
+        d.setKomisijskiModel(true);
+        db().saveDobavljac(d);
+
+        Artikl a = new Artikl("Kom Artikl2", "KOM002", 30.00, 25.0, 20);
+        db().saveArtikl(a);
+
+        // Nabava 3 kom u komisiju
+        Nabava n = new Nabava(a.getId(), a.getNaziv(), 3, 10.00, null);
+        n.setDobavljacId(d.getId());
+        n.setDobavljacNaziv(d.getNaziv());
+        n.setVrijemeNabave(LocalDateTime.of(2024, 5, 1, 9, 0, 0));
+        db().saveNabava(n);
+
+        // Prodano 10 kom ukupno (vise nego nabavljeno u komisiju)
+        Racun r = buildRacun(1, Racun.NacinPlacanja.GOTOVINA);
+        r.setVrijemeIzdavanja(LocalDateTime.of(2024, 5, 10, 10, 0, 0));
+        r.getStavke().add(new StavkaRacuna(a, 10, 0.0));
+        db().saveRacun(r);
+
+        List<KomisijaStavka> stavke = db().generirajKomisijaObracun(d.getId(), 2024, 5);
+        assertEquals(1, stavke.size());
+        // Prodano je ograniceno na nabavljeno
+        assertEquals(3, stavke.get(0).getProdano());
+        assertEquals(0, stavke.get(0).getOstalo());
+    }
+
+    @Test
+    void spremiKomisijaObracun_PersistsAndLoads() throws Exception {
+        Dobavljac d = new Dobavljac("Kom Spremi", null, null, null, null);
+        d.setKomisijskiModel(true);
+        db().saveDobavljac(d);
+
+        Artikl a = new Artikl("Kom Spremi Artikl", "KSA001", 40.00, 25.0, 0);
+        db().saveArtikl(a);
+
+        List<KomisijaStavka> stavke = List.of(
+            new KomisijaStavka(a.getId(), a.getNaziv(), 8, 3, 15.00));
+        db().spremiKomisijaObracun(d, 2024, 5, stavke);
+
+        List<KomisijaStavka> loaded = db().getSpremiKomisijaObracun(d.getId(), 2024, 5);
+        assertEquals(1, loaded.size());
+        assertEquals(8, loaded.get(0).getNabavljeno());
+        assertEquals(3, loaded.get(0).getProdano());
+        assertEquals(5, loaded.get(0).getOstalo());
+    }
+
+    @Test
+    void spremiKomisijaObracun_ZamjenjujePostojeci() throws Exception {
+        Dobavljac d = new Dobavljac("Kom Zamjena", null, null, null, null);
+        d.setKomisijskiModel(true);
+        db().saveDobavljac(d);
+
+        Artikl a = new Artikl("Kom Zamjena Artikl", "KZA001", 20.00, 25.0, 0);
+        db().saveArtikl(a);
+
+        // Spremi prvi obracun
+        db().spremiKomisijaObracun(d, 2024, 5,
+            List.of(new KomisijaStavka(a.getId(), a.getNaziv(), 5, 2, 10.00)));
+        // Spremi novi obracun za isti period
+        db().spremiKomisijaObracun(d, 2024, 5,
+            List.of(new KomisijaStavka(a.getId(), a.getNaziv(), 5, 4, 10.00)));
+
+        List<KomisijaStavka> loaded = db().getSpremiKomisijaObracun(d.getId(), 2024, 5);
+        assertEquals(1, loaded.size());
+        assertEquals(4, loaded.get(0).getProdano()); // novi podaci
+    }
 }

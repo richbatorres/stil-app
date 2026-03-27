@@ -4,10 +4,12 @@ import stil.app.model.Artikl;
 import stil.app.model.Config;
 import stil.app.model.Dobavljac;
 import stil.app.model.IzvjestajPodaci;
+import stil.app.model.KomisijaStavka;
 import stil.app.model.Nabava;
 import stil.app.model.PovratRobe;
 import stil.app.model.Racun;
 import stil.app.model.StavkaRacuna;
+import stil.app.model.Zaklucnica;
 import stil.app.util.CryptoUtil;
 
 import java.sql.*;
@@ -39,6 +41,11 @@ public class DatabaseManager {
     static String DB_URL = "jdbc:sqlite:stil.db";
     private static DatabaseManager instance;
     private Connection connection;
+    // Keširani prepared statementi za česte upite
+    private PreparedStatement psGetArtikli;
+    private PreparedStatement psGetArtiklById;
+    private PreparedStatement psUpdateKolicina;
+    private PreparedStatement psGetSljedeciBroj;
 
     private DatabaseManager() throws SQLException {
         connection = DriverManager.getConnection(DB_URL);
@@ -140,6 +147,37 @@ public class DatabaseManager {
                 dobavljac_id INTEGER NOT NULL REFERENCES dobavljac(id) ON DELETE CASCADE,
                 PRIMARY KEY (artikl_id, dobavljac_id)
             )""");
+        st.execute("""
+            CREATE TABLE IF NOT EXISTS komisija_obracun (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dobavljac_id INTEGER NOT NULL REFERENCES dobavljac(id),
+                dobavljac_naziv TEXT NOT NULL,
+                godina INTEGER NOT NULL,
+                mjesec INTEGER NOT NULL,
+                artikl_id INTEGER NOT NULL REFERENCES artikl(id),
+                artikl_naziv TEXT NOT NULL,
+                nabavljeno INTEGER NOT NULL,
+                prodano INTEGER NOT NULL,
+                ostalo INTEGER NOT NULL,
+                nabavna_cijena REAL NOT NULL,
+                UNIQUE(dobavljac_id, godina, mjesec, artikl_id)
+            )""");
+        st.execute("""
+            CREATE TABLE IF NOT EXISTS zaklucnica (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vrijeme_generiranja TEXT NOT NULL,
+                dan_od TEXT NOT NULL,
+                dan_do TEXT NOT NULL,
+                broj_racuna INTEGER NOT NULL,
+                ukupno_eur REAL NOT NULL,
+                gotovina_eur REAL NOT NULL,
+                kartica_eur REAL NOT NULL,
+                putanja_pdf TEXT
+            )""");
+        // Dodaj komisijski_model kolonu ako ne postoji (migracija za postojece baze)
+        try {
+            st.execute("ALTER TABLE dobavljac ADD COLUMN komisijski_model INTEGER NOT NULL DEFAULT 0");
+        } catch (SQLException ignored) {} // kolona vec postoji
     }
 
     // -------------------------------------------------------------------------
@@ -221,8 +259,10 @@ public class DatabaseManager {
      * @throws SQLException ako dođe do greške pri čitanju
      */
     public List<Artikl> getArtikli() throws SQLException {
+        if (psGetArtikli == null || psGetArtikli.isClosed())
+            psGetArtikli = connection.prepareStatement("SELECT * FROM artikl ORDER BY naziv");
         List<Artikl> lista = new ArrayList<>();
-        ResultSet rs = connection.createStatement().executeQuery("SELECT * FROM artikl ORDER BY naziv");
+        ResultSet rs = psGetArtikli.executeQuery();
         while (rs.next()) lista.add(mapArtikl(rs));
         return lista;
     }
@@ -249,9 +289,10 @@ public class DatabaseManager {
      * @throws SQLException ako dođe do greške
      */
     public Artikl getArtiklById(int id) throws SQLException {
-        PreparedStatement ps = connection.prepareStatement("SELECT * FROM artikl WHERE id = ?");
-        ps.setInt(1, id);
-        ResultSet rs = ps.executeQuery();
+        if (psGetArtiklById == null || psGetArtiklById.isClosed())
+            psGetArtiklById = connection.prepareStatement("SELECT * FROM artikl WHERE id = ?");
+        psGetArtiklById.setInt(1, id);
+        ResultSet rs = psGetArtiklById.executeQuery();
         return rs.next() ? mapArtikl(rs) : null;
     }
 
@@ -311,25 +352,23 @@ public class DatabaseManager {
      */
     public void updateKolicina(int artiklId, int promjena) throws SQLException {
         if (promjena < 0) {
-            // Provjeri ima li dovoljno zalihe prije smanjenja
-            PreparedStatement check = connection.prepareStatement(
-                "SELECT kolicina_na_skladistu FROM artikl WHERE id=?");
-            check.setInt(1, artiklId);
-            ResultSet rs = check.executeQuery();
+            if (psGetArtiklById == null || psGetArtiklById.isClosed())
+                psGetArtiklById = connection.prepareStatement("SELECT kolicina_na_skladistu FROM artikl WHERE id=?");
+            psGetArtiklById.setInt(1, artiklId);
+            ResultSet rs = psGetArtiklById.executeQuery();
             if (rs.next()) {
                 int trenutna = rs.getInt(1);
-                if (trenutna + promjena < 0) {
-                    throw new SQLException(
-                        "Nedovoljna zaliha: na skladištu je " + trenutna +
+                if (trenutna + promjena < 0)
+                    throw new SQLException("Nedovoljna zaliha: na skladištu je " + trenutna +
                         " kom, a traži se " + Math.abs(promjena) + " kom.");
-                }
             }
         }
-        PreparedStatement ps = connection.prepareStatement(
-            "UPDATE artikl SET kolicina_na_skladistu = kolicina_na_skladistu + ? WHERE id=?");
-        ps.setInt(1, promjena);
-        ps.setInt(2, artiklId);
-        ps.executeUpdate();
+        if (psUpdateKolicina == null || psUpdateKolicina.isClosed())
+            psUpdateKolicina = connection.prepareStatement(
+                "UPDATE artikl SET kolicina_na_skladistu = kolicina_na_skladistu + ? WHERE id=?");
+        psUpdateKolicina.setInt(1, promjena);
+        psUpdateKolicina.setInt(2, artiklId);
+        psUpdateKolicina.executeUpdate();
     }
 
     // -------------------------------------------------------------------------
@@ -344,7 +383,10 @@ public class DatabaseManager {
      * @throws SQLException ako dođe do greške
      */
     public int getSljedeciBrojRacuna() throws SQLException {
-        ResultSet rs = connection.createStatement().executeQuery("SELECT COALESCE(MAX(broj_racuna), 0) + 1 FROM racun");
+        if (psGetSljedeciBroj == null || psGetSljedeciBroj.isClosed())
+            psGetSljedeciBroj = connection.prepareStatement(
+                "SELECT COALESCE(MAX(broj_racuna), 0) + 1 FROM racun");
+        ResultSet rs = psGetSljedeciBroj.executeQuery();
         return rs.getInt(1);
     }
 
@@ -506,7 +548,7 @@ public class DatabaseManager {
     public void saveDobavljac(Dobavljac d) throws SQLException {
         if (d.getId() == 0) {
             PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO dobavljac(naziv, oib, adresa, email, telefon, napomena) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO dobavljac(naziv, oib, adresa, email, telefon, napomena, komisijski_model) VALUES(?,?,?,?,?,?,?)",
                 Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, d.getNaziv());
             ps.setString(2, d.getOib());
@@ -514,18 +556,20 @@ public class DatabaseManager {
             ps.setString(4, d.getEmail());
             ps.setString(5, d.getTelefon());
             ps.setString(6, d.getNapomena());
+            ps.setInt(7, d.isKomisijskiModel() ? 1 : 0);
             ps.executeUpdate();
             d.setId((int) ps.getGeneratedKeys().getLong(1));
         } else {
             PreparedStatement ps = connection.prepareStatement(
-                "UPDATE dobavljac SET naziv=?, oib=?, adresa=?, email=?, telefon=?, napomena=? WHERE id=?");
+                "UPDATE dobavljac SET naziv=?, oib=?, adresa=?, email=?, telefon=?, napomena=?, komisijski_model=? WHERE id=?");
             ps.setString(1, d.getNaziv());
             ps.setString(2, d.getOib());
             ps.setString(3, d.getAdresa());
             ps.setString(4, d.getEmail());
             ps.setString(5, d.getTelefon());
             ps.setString(6, d.getNapomena());
-            ps.setInt(7, d.getId());
+            ps.setInt(7, d.isKomisijskiModel() ? 1 : 0);
+            ps.setInt(8, d.getId());
             ps.executeUpdate();
         }
     }
@@ -821,6 +865,236 @@ public class DatabaseManager {
     }
 
     // -------------------------------------------------------------------------
+    // KOMISIJA
+    // -------------------------------------------------------------------------
+
+    /**
+     * Vraća dobavljače koji nude komisijski model prodaje.
+     *
+     * @return lista komisijskih dobavljača sortirana po nazivu
+     * @throws SQLException ako dođe do greške
+     */
+    public List<Dobavljac> getKomisijskiDobavljaci() throws SQLException {
+        List<Dobavljac> lista = new ArrayList<>();
+        ResultSet rs = connection.createStatement().executeQuery(
+            "SELECT * FROM dobavljac WHERE komisijski_model = 1 ORDER BY naziv");
+        while (rs.next()) lista.add(mapDobavljac(rs));
+        return lista;
+    }
+
+    /**
+     * Generira komisijski obračun za zadanog dobavljača i mjesec.
+     * Za svaki artikl koji je nabavljen od tog dobavljača u zadanom mjesecu
+     * izračunava koliko je prodano (iz stavki računa) i koliko je ostalo.
+     *
+     * Prodano = sve stavke računa za taj artikl u tom mjesecu (neovisno o dobavljaču).
+     * Ostalo = nabavljeno - prodano (ne može biti negativno).
+     *
+     * @param dobavljacId ID dobavljača
+     * @param godina      godina obračuna
+     * @param mjesec      mjesec obračuna (1-12)
+     * @return lista stavki obračuna, jedna po artiklu
+     * @throws SQLException ako dođe do greške
+     */
+    public List<KomisijaStavka> generirajKomisijaObracun(int dobavljacId, int godina, int mjesec)
+            throws SQLException {
+        String od = String.format("%04d-%02d-01T00:00:00", godina, mjesec);
+        // Zadnji dan u mjesecu
+        java.time.YearMonth ym = java.time.YearMonth.of(godina, mjesec);
+        String do_ = String.format("%04d-%02d-%02dT23:59:59", godina, mjesec, ym.lengthOfMonth());
+
+        // Nabave od tog dobavljača u tom mjesecu, grupirane po artiklu
+        PreparedStatement psNab = connection.prepareStatement("""
+            SELECT artikl_id, artikl_naziv,
+                   SUM(kolicina) AS ukupno_nabavljeno,
+                   AVG(nabavna_cijena) AS avg_cijena
+            FROM nabava
+            WHERE dobavljac_id = ?
+              AND vrijeme_nabave >= ? AND vrijeme_nabave <= ?
+            GROUP BY artikl_id, artikl_naziv
+            """);
+        psNab.setInt(1, dobavljacId);
+        psNab.setString(2, od);
+        psNab.setString(3, do_);
+        ResultSet rsNab = psNab.executeQuery();
+
+        List<KomisijaStavka> stavke = new ArrayList<>();
+        while (rsNab.next()) {
+            int artiklId = rsNab.getInt("artikl_id");
+            String artiklNaziv = rsNab.getString("artikl_naziv");
+            int nabavljeno = rsNab.getInt("ukupno_nabavljeno");
+            double nabavnaCijena = rsNab.getDouble("avg_cijena");
+
+            // Prodano u tom mjesecu za taj artikl (iz svih računa, ne storniranih)
+            PreparedStatement psProd = connection.prepareStatement("""
+                SELECT COALESCE(SUM(s.kolicina), 0) AS prodano
+                FROM stavka_racuna s
+                JOIN racun r ON r.id = s.racun_id
+                WHERE s.artikl_id = ?
+                  AND r.status != 'STORNIRAN'
+                  AND r.vrijeme_izdavanja >= ? AND r.vrijeme_izdavanja <= ?
+                """);
+            psProd.setInt(1, artiklId);
+            psProd.setString(2, od);
+            psProd.setString(3, do_);
+            ResultSet rsProd = psProd.executeQuery();
+            int prodano = rsProd.next() ? rsProd.getInt("prodano") : 0;
+            // Prodano ne može biti veće od nabavljenog u komisiju
+            prodano = Math.min(prodano, nabavljeno);
+
+            stavke.add(new KomisijaStavka(artiklId, artiklNaziv, nabavljeno, prodano, nabavnaCijena));
+        }
+        return stavke;
+    }
+
+    /**
+     * Sprema generirani komisijski obračun u bazu (UPSERT po dobavljač+godina+mjesec+artikl).
+     * Postojeći obračun za isti period se zamjenjuje.
+     *
+     * @param dobavljac dobavljač za kojeg se sprema obračun
+     * @param godina    godina obračuna
+     * @param mjesec    mjesec obračuna (1-12)
+     * @param stavke    lista stavki obračuna
+     * @throws SQLException ako dođe do greške
+     */
+    public void spremiKomisijaObracun(Dobavljac dobavljac, int godina, int mjesec,
+                                      List<KomisijaStavka> stavke) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            // Obrisi stari obracun za isti period
+            PreparedStatement del = connection.prepareStatement(
+                "DELETE FROM komisija_obracun WHERE dobavljac_id=? AND godina=? AND mjesec=?");
+            del.setInt(1, dobavljac.getId());
+            del.setInt(2, godina);
+            del.setInt(3, mjesec);
+            del.executeUpdate();
+
+            PreparedStatement ins = connection.prepareStatement("""
+                INSERT INTO komisija_obracun
+                    (dobavljac_id, dobavljac_naziv, godina, mjesec,
+                     artikl_id, artikl_naziv, nabavljeno, prodano, ostalo, nabavna_cijena)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                """);
+            for (KomisijaStavka s : stavke) {
+                ins.setInt(1, dobavljac.getId());
+                ins.setString(2, dobavljac.getNaziv());
+                ins.setInt(3, godina);
+                ins.setInt(4, mjesec);
+                ins.setInt(5, s.getArtiklId());
+                ins.setString(6, s.getArtiklNaziv());
+                ins.setInt(7, s.getNabavljeno());
+                ins.setInt(8, s.getProdano());
+                ins.setInt(9, s.getOstalo());
+                ins.setDouble(10, s.getNabavnaCijena());
+                ins.executeUpdate();
+            }
+            connection.commit();
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
+    /**
+     * Vraća sve snimljene komisijske obračune za zadanog dobavljača, sortirane od najnovijeg.
+     *
+     * @param dobavljacId ID dobavljača
+     * @return lista stavki svih obračuna
+     * @throws SQLException ako dođe do greške
+     */
+    public List<KomisijaStavka> getSpremiKomisijaObracun(int dobavljacId, int godina, int mjesec)
+            throws SQLException {
+        List<KomisijaStavka> lista = new ArrayList<>();
+        PreparedStatement ps = connection.prepareStatement("""
+            SELECT * FROM komisija_obracun
+            WHERE dobavljac_id=? AND godina=? AND mjesec=?
+            ORDER BY artikl_naziv
+            """);
+        ps.setInt(1, dobavljacId);
+        ps.setInt(2, godina);
+        ps.setInt(3, mjesec);
+        ResultSet rs = ps.executeQuery();
+        while (rs.next()) {
+            KomisijaStavka s = new KomisijaStavka();
+            s.setArtiklId(rs.getInt("artikl_id"));
+            s.setArtiklNaziv(rs.getString("artikl_naziv"));
+            s.setNabavljeno(rs.getInt("nabavljeno"));
+            s.setProdano(rs.getInt("prodano"));
+            s.setNabavnaCijena(rs.getDouble("nabavna_cijena"));
+            lista.add(s);
+        }
+        return lista;
+    }
+
+    // -------------------------------------------------------------------------
+    // ZAKLUCNICA
+    // -------------------------------------------------------------------------
+
+    /**
+     * Generira podatke za zaključnicu za zadani dan iz baze.
+     *
+     * @param dan datum radnog dana
+     * @return Zaklucnica s agregiranim podacima
+     * @throws SQLException ako dođe do greške
+     */
+    public Zaklucnica generirajZaklucnicu(java.time.LocalDate dan) throws SQLException {
+        String od = dan.atStartOfDay().toString();
+        String do_ = dan.atTime(23, 59, 59).toString();
+
+        PreparedStatement ps = connection.prepareStatement("""
+            SELECT
+                COUNT(DISTINCT r.id) AS br_racuna,
+                COALESCE(SUM(s.cijena * s.kolicina * (1 - s.popust/100.0)), 0) AS ukupno,
+                COALESCE(SUM(CASE WHEN r.nacin_placanja='GOTOVINA' THEN s.cijena * s.kolicina * (1 - s.popust/100.0) ELSE 0 END), 0) AS gotovina,
+                COALESCE(SUM(CASE WHEN r.nacin_placanja='KARTICA'  THEN s.cijena * s.kolicina * (1 - s.popust/100.0) ELSE 0 END), 0) AS kartica
+            FROM racun r
+            JOIN stavka_racuna s ON s.racun_id = r.id
+            WHERE r.status != 'STORNIRAN'
+              AND r.vrijeme_izdavanja >= ? AND r.vrijeme_izdavanja <= ?
+            """);
+        ps.setString(1, od);
+        ps.setString(2, do_);
+        ResultSet rs = ps.executeQuery();
+
+        Zaklucnica z = new Zaklucnica();
+        z.setVrijemeGeneriranja(LocalDateTime.now());
+        z.setDanOd(dan.atStartOfDay());
+        z.setDanDo(dan.atTime(23, 59, 59));
+        if (rs.next()) {
+            z.setBrojRacuna(rs.getInt("br_racuna"));
+            z.setUkupnoEur(rs.getDouble("ukupno"));
+            z.setGotovinaEur(rs.getDouble("gotovina"));
+            z.setKarticaEur(rs.getDouble("kartica"));
+        }
+        return z;
+    }
+
+    /**
+     * Sprema zaključnicu u bazu. Postavlja generirani id na objekt.
+     *
+     * @param z zaključnica za pohraniti
+     * @throws SQLException ako dođe do greške
+     */
+    public void saveZaklucnica(Zaklucnica z) throws SQLException {
+        PreparedStatement ps = connection.prepareStatement(
+            "INSERT INTO zaklucnica(vrijeme_generiranja, dan_od, dan_do, broj_racuna, " +
+            "ukupno_eur, gotovina_eur, kartica_eur, putanja_pdf) VALUES(?,?,?,?,?,?,?,?)",
+            Statement.RETURN_GENERATED_KEYS);
+        ps.setString(1, z.getVrijemeGeneriranja().toString());
+        ps.setString(2, z.getDanOd().toString());
+        ps.setString(3, z.getDanDo().toString());
+        ps.setInt(4, z.getBrojRacuna());
+        ps.setDouble(5, z.getUkupnoEur());
+        ps.setDouble(6, z.getGotovinaEur());
+        ps.setDouble(7, z.getKarticaEur());
+        ps.setString(8, z.getPutanjaPdf());
+        ps.executeUpdate();
+        z.setId((int) ps.getGeneratedKeys().getLong(1));
+    }
+
+    // -------------------------------------------------------------------------
     // MAPPING HELPERS
     // -------------------------------------------------------------------------
 
@@ -858,6 +1132,7 @@ public class DatabaseManager {
         d.setEmail(rs.getString("email"));
         d.setTelefon(rs.getString("telefon"));
         d.setNapomena(rs.getString("napomena"));
+        d.setKomisijskiModel(rs.getInt("komisijski_model") == 1);
         return d;
     }
 

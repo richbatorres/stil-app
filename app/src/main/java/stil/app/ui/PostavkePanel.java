@@ -8,7 +8,6 @@ import javax.print.PrintServiceLookup;
 import javax.swing.*;
 import java.awt.*;
 import java.sql.SQLException;
-
 /**
  * Panel za konfiguraciju aplikacije.
  *
@@ -69,7 +68,6 @@ public class PostavkePanel extends JPanel {
         add(scroll, BorderLayout.CENTER);
 
         JButton spremiBtn = new JButton("Spremi postavke");
-        spremiBtn.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
         JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         bottom.add(spremiBtn);
         add(bottom, BorderLayout.SOUTH);
@@ -82,7 +80,6 @@ public class PostavkePanel extends JPanel {
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         JLabel label = new JLabel(text);
-        label.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
         label.setForeground(Color.GRAY);
         panel.add(label, gbc);
         gbc.gridwidth = 1;

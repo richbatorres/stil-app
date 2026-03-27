@@ -18,6 +18,7 @@ public class Dobavljac {
     private String email;       // kontakt email
     private String telefon;     // kontakt telefon
     private String napomena;    // slobodna napomena (uvjeti plaćanja, rok isporuke, itd.)
+    private boolean komisijskiModel; // nudi li dobavljač komisijsku prodaju (povrat neprodanog)
 
     public Dobavljac() {}
 
@@ -58,6 +59,9 @@ public class Dobavljac {
 
     public String getNapomena() { return napomena; }
     public void setNapomena(String napomena) { this.napomena = napomena; }
+
+    public boolean isKomisijskiModel() { return komisijskiModel; }
+    public void setKomisijskiModel(boolean komisijskiModel) { this.komisijskiModel = komisijskiModel; }
 
     /** Vraća naziv dobavljača — koristi se za prikaz u Swing komponentama (npr. JComboBox). */
     @Override

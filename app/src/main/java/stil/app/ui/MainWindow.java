@@ -1,5 +1,8 @@
 package stil.app.ui;
 
+import stil.app.db.DatabaseManager;
+import stil.app.model.Zaklucnica;
+import stil.app.print.IspisIzvjestaja;
 import javax.swing.*;
 import java.awt.*;
 
@@ -26,6 +29,7 @@ public class MainWindow extends JFrame {
     private final ProdajaPanel    prodajaPanel;
     private final PovratRobePanel povratRobePanel;
     private final NabavaPanel     nabavaPanel;
+    private final KomisijaPanel   komisijaPanel;
 
     public MainWindow() {
         setTitle("STIL A j.d.o.o. — Blagajna");
@@ -37,6 +41,7 @@ public class MainWindow extends JFrame {
         prodajaPanel    = new ProdajaPanel();
         povratRobePanel = new PovratRobePanel();
         nabavaPanel     = new NabavaPanel();
+        komisijaPanel   = new KomisijaPanel();
 
         JTabbedPane tabs = new JTabbedPane();
         tabs.addTab("Prodaja",     prodajaPanel);
@@ -44,6 +49,7 @@ public class MainWindow extends JFrame {
         tabs.addTab("Dobavljači",  new DobavljaciPanel());
         tabs.addTab("Nabava",      nabavaPanel);
         tabs.addTab("Povrat robe", povratRobePanel);
+        tabs.addTab("Komisija",    komisijaPanel);
         tabs.addTab("Izvještaji",  new IzvjestajiPanel());
         tabs.addTab("Postavke",    new PostavkePanel());
 
@@ -53,16 +59,22 @@ public class MainWindow extends JFrame {
                 povratRobePanel.ucitajPodatke();
             } else if (tabs.getSelectedComponent() == nabavaPanel) {
                 nabavaPanel.ucitajPodatke();
+            } else if (tabs.getSelectedComponent() == komisijaPanel) {
+                komisijaPanel.ucitajDobavljace();
             }
         });
 
         JButton zakljucajBtn = new JButton("🔒 Zaključaj");
-        zakljucajBtn.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
         zakljucajBtn.setFocusable(false);
         zakljucajBtn.addActionListener(e -> zakljucaj());
 
+        JButton zaklucnicaBtn = new JButton("📄 Zaključnica");
+        zaklucnicaBtn.setFocusable(false);
+        zaklucnicaBtn.addActionListener(e -> generirajZaklucnicu());
+
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 2));
         btnPanel.setOpaque(false);
+        btnPanel.add(zaklucnicaBtn);
         btnPanel.add(zakljucajBtn);
 
         setLayout(new BorderLayout());
@@ -70,6 +82,50 @@ public class MainWindow extends JFrame {
         add(tabs, BorderLayout.CENTER);
 
         zakljucaj();
+    }
+
+    /**
+     * Generira dnevnu zaključnicu, sprema u bazu i PDF, ispisuje.
+     */
+    private void generirajZaklucnicu() {
+        try {
+            DatabaseManager db = DatabaseManager.getInstance();
+            Zaklucnica z = db.generirajZaklucnicu(java.time.LocalDate.now());
+
+            // Spremi PDF
+            java.nio.file.Path pdf = IspisIzvjestaja.spremiZaklucnicuPdf(z, "zaklucnice");
+            z.setPutanjaPdf(pdf.toString());
+
+            // Spremi u bazu
+            db.saveZaklucnica(z);
+
+            // Prikaži podatke korisniku
+            String poruka = String.format(
+                "DNEVNA ZAKLJUČNICA%n" +
+                "Dan: %s%n%n" +
+                "Broj računa:   %d%n" +
+                "Ukupno:       %.2f EUR%n" +
+                "Gotovina:     %.2f EUR%n" +
+                "Kartica:      %.2f EUR%n%n" +
+                "PDF spremljen u:%n%s",
+                z.getDanOd().toLocalDate(),
+                z.getBrojRacuna(), z.getUkupnoEur(),
+                z.getGotovinaEur(), z.getKarticaEur(),
+                pdf);
+            JOptionPane.showMessageDialog(this, poruka, "Zaključnica", JOptionPane.INFORMATION_MESSAGE);
+
+            // Ispis
+            String greška = IspisIzvjestaja.ispisiPdf(pdf);
+            if (greška != null) {
+                JOptionPane.showMessageDialog(this,
+                    "Zaključnica je spremljena.\nIspis nije moguć.\nRazlog: " + greška,
+                    "Ispis nije uspio", JOptionPane.WARNING_MESSAGE);
+            }
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this,
+                "Greška pri generiranju zaključnice: " + e.getMessage(),
+                "Greška", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     /**

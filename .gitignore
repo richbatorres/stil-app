@@ -6,17 +6,18 @@ app/build/
 # SQLite baze (produkcijska i testna)
 *.db
 
+# Generirani dokumenti — poslovni podaci
+racuni/
+racuni_backup/
+zaklucnice/
+komisija/
+
 # Logovi
 *.txt
 app-log.txt
 
 # Test output (kompajlirane klase, ne source)
-test-out/main/
-test-out/test/
-test-out/runner/
-test-out/*.class
-test-out/*.db
-test-out/racuni/
+test-out/
 
 # Eclipse bin direktorij
 app/bin/

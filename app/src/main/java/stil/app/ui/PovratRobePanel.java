@@ -92,7 +92,6 @@ public class PovratRobePanel extends JPanel {
         addRow(panel, gbc, 5, "Razlog:", razlogField);
 
         JButton spremiBtn = new JButton("Evidentiraj povrat");
-        spremiBtn.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
         gbc.gridx = 0; gbc.gridy = 6; gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.NONE;
         panel.add(spremiBtn, gbc);
@@ -107,8 +106,7 @@ public class PovratRobePanel extends JPanel {
         panel.setBorder(BorderFactory.createTitledBorder("Povijest povrata"));
 
         JTable table = new JTable(tableModel);
-        table.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
-        table.setRowHeight(22);
+        table.setRowHeight(36);
         table.getColumnModel().getColumn(0).setPreferredWidth(120);
         table.getColumnModel().getColumn(1).setPreferredWidth(160);
         table.getColumnModel().getColumn(2).setPreferredWidth(90);

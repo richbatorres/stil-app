@@ -24,6 +24,7 @@ dependencies {
 
     implementation libs.guava
     implementation libs.sqlite
+    implementation 'org.apache.pdfbox:pdfbox:3.0.3'
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
@@ -42,6 +43,11 @@ tasks.named('test') {
     // Use JUnit Platform for unit tests.
     useJUnitPlatform()
     finalizedBy jacocoTestReport
+}
+
+task copyDeps(type: Copy) {
+    from configurations.runtimeClasspath
+    into 'libs'
 }
 
 jacocoTestReport {

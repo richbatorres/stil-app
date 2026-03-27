@@ -13,6 +13,13 @@ import java.util.regex.Pattern;
  */
 public class Validator {
 
+    // U headless modu (testovi) ne prikazujemo dijaloge
+    private static void upozori(Component parent, String poruka) {
+        if (!java.awt.GraphicsEnvironment.isHeadless()) {
+            JOptionPane.showMessageDialog(parent, poruka, "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
     private static final Pattern EMAIL_PATTERN =
         Pattern.compile("^[\\w.+-]+@[\\w-]+\\.[\\w.]+$");
     private static final Pattern OIB_PATTERN =
@@ -33,27 +40,22 @@ public class Validator {
                                       boolean dozvoli0, boolean dozvoliNeg) {
         String s = tekst == null ? "" : tekst.trim().replace(",", ".");
         if (s.isEmpty()) {
-            JOptionPane.showMessageDialog(parent,
-                naziv + " je obavezno polje.", "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, naziv + " je obavezno polje.");
             return null;
         }
         double v;
         try {
             v = Double.parseDouble(s);
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(parent,
-                naziv + ": \"" + tekst.trim() + "\" nije ispravan broj.\nPrimjer ispravnog unosa: 12.50",
-                "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, naziv + ": \"" + tekst.trim() + "\" nije ispravan broj.\nPrimjer ispravnog unosa: 12.50");
             return null;
         }
         if (!dozvoliNeg && v < 0) {
-            JOptionPane.showMessageDialog(parent,
-                naziv + " ne može biti negativan.", "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, naziv + " ne može biti negativan.");
             return null;
         }
         if (!dozvoli0 && v == 0) {
-            JOptionPane.showMessageDialog(parent,
-                naziv + " mora biti veći od nule.", "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, naziv + " mora biti veći od nule.");
             return null;
         }
         return v;
@@ -72,22 +74,18 @@ public class Validator {
     public static Integer parseInt(Component parent, String tekst, String naziv, int min) {
         String s = tekst == null ? "" : tekst.trim();
         if (s.isEmpty()) {
-            JOptionPane.showMessageDialog(parent,
-                naziv + " je obavezno polje.", "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, naziv + " je obavezno polje.");
             return null;
         }
         int v;
         try {
             v = Integer.parseInt(s);
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(parent,
-                naziv + ": \"" + s + "\" nije ispravan cijeli broj.\nPrimjer ispravnog unosa: 5",
-                "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, naziv + ": \"" + s + "\" nije ispravan cijeli broj.\nPrimjer ispravnog unosa: 5");
             return null;
         }
         if (v < min) {
-            JOptionPane.showMessageDialog(parent,
-                naziv + " mora biti najmanje " + min + ".", "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, naziv + " mora biti najmanje " + min + ".");
             return null;
         }
         return v;
@@ -105,9 +103,7 @@ public class Validator {
     public static boolean validateOib(Component parent, String oib) {
         if (oib == null || oib.trim().isEmpty()) return true; // opcionalno
         if (!OIB_PATTERN.matcher(oib.trim()).matches()) {
-            JOptionPane.showMessageDialog(parent,
-                "OIB mora sadržavati točno 11 znamenki.\nUneseno: \"" + oib.trim() + "\"",
-                "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, "OIB mora sadržavati točno 11 znamenki.\nUneseno: \"" + oib.trim() + "\"");
             return false;
         }
         return true;
@@ -124,9 +120,7 @@ public class Validator {
     public static boolean validateEmail(Component parent, String email) {
         if (email == null || email.trim().isEmpty()) return true;
         if (!EMAIL_PATTERN.matcher(email.trim()).matches()) {
-            JOptionPane.showMessageDialog(parent,
-                "Email adresa nije ispravnog formata.\nUneseno: \"" + email.trim() + "\"\nPrimjer: ime@tvrtka.hr",
-                "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, "Email adresa nije ispravnog formata.\nUneseno: \"" + email.trim() + "\"\nPrimjer: ime@tvrtka.hr");
             return false;
         }
         return true;
@@ -142,8 +136,7 @@ public class Validator {
      */
     public static boolean requireNonEmpty(Component parent, String tekst, String naziv) {
         if (tekst == null || tekst.trim().isEmpty()) {
-            JOptionPane.showMessageDialog(parent,
-                naziv + " je obavezno polje.", "Neispravan unos", JOptionPane.WARNING_MESSAGE);
+            upozori(parent, naziv + " je obavezno polje.");
             return false;
         }
         return true;

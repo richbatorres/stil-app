@@ -4,6 +4,8 @@ import stil.app.db.DatabaseManager;
 import stil.app.model.IzvjestajPodaci;
 import stil.app.model.Racun;
 
+import stil.app.print.IspisIzvjestaja;
+
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
@@ -31,6 +33,9 @@ public class IzvjestajiPanel extends JPanel {
     private final JTextArea sumarnoArea = new JTextArea(12, 40);
     private final DefaultTableModel racuniModel;
 
+    private IzvjestajPodaci trenutniIzvjestaj;
+    private LocalDate trenutniOd, trenutniDo;
+
     public IzvjestajiPanel() {
         setLayout(new BorderLayout(8, 8));
         setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
@@ -50,7 +55,6 @@ public class IzvjestajiPanel extends JPanel {
         racuniPanel.add(racuniToolbar, BorderLayout.SOUTH);
 
         sumarnoArea.setEditable(false);
-        sumarnoArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
         sumarnoArea.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
 
         JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
@@ -81,6 +85,10 @@ public class IzvjestajiPanel extends JPanel {
         JButton prikaziBtn = new JButton("📊 Prikaži izvještaj");
         prikaziBtn.addActionListener(e -> prikaziIzvjestaj());
         p.add(prikaziBtn);
+
+        JButton ispisBtn = new JButton("🖨 Ispis izvještaja");
+        ispisBtn.addActionListener(e -> ispisIzvjestaja());
+        p.add(ispisBtn);
 
         // Brzi gumbi za česta razdoblja
         JButton danasnjiBtn = new JButton("Danas");
@@ -185,13 +193,36 @@ public class IzvjestajiPanel extends JPanel {
 
         try {
             DatabaseManager db = DatabaseManager.getInstance();
-            IzvjestajPodaci izvj = db.generirajIzvjestaj(odStr, doStr);
+            trenutniIzvjestaj = db.generirajIzvjestaj(odStr, doStr);
+            trenutniOd = od;
+            trenutniDo = do_;
             List<Racun> racuni = db.getRacuniURasponu(odStr, doStr);
-
-            prikaziSumarno(izvj, od, do_);
+            prikaziSumarno(trenutniIzvjestaj, od, do_);
             prikaziRacune(racuni);
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Greška pri generiranju izvještaja: " + e.getMessage(),
+                "Greška", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /** Sprema i ispisuje trenutni izvještaj kao PDF. */
+    private void ispisIzvjestaja() {
+        if (trenutniIzvjestaj == null) {
+            JOptionPane.showMessageDialog(this, "Prvo prikažite izvještaj.",
+                "Upozorenje", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        try {
+            java.nio.file.Path pdf = IspisIzvjestaja.spremiIzvjestajPdf(
+                trenutniIzvjestaj, trenutniOd, trenutniDo, "izvjestaji");
+            String greška = IspisIzvjestaja.ispisiPdf(pdf);
+            if (greška != null) {
+                JOptionPane.showMessageDialog(this,
+                    "Izvještaj je spremljen u:\n" + pdf + "\n\nIspis nije moguć.\nRazlog: " + greška,
+                    "Ispis nije uspio", JOptionPane.WARNING_MESSAGE);
+            }
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "Greška pri generiranju PDF-a: " + e.getMessage(),
                 "Greška", JOptionPane.ERROR_MESSAGE);
         }
     }

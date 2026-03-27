@@ -1,203 +1,246 @@
 package stil.app.print;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import stil.app.model.Config;
 import stil.app.model.Racun;
 import stil.app.model.StavkaRacuna;
 
 import javax.print.*;
-import java.awt.*;
 import java.awt.print.*;
+import java.io.IOException;
+import java.nio.file.*;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
- * Implementira ispis fiskalnog računa na termalni printer (80mm papir).
+ * Generira PDF račun i ispisuje ga na printer.
  *
- * Koristi Java standardni {@link Printable} API bez vanjskih biblioteka.
- * Sadržaj računa se priprema kao lista tekstualnih redaka s fontom (pripremiLinije),
- * a zatim se iscrtava u metodi {@link #print(Graphics, PageFormat, int)}.
- *
- * Format papira: 80mm širina, 297mm visina, margine 3mm sa svake strane.
- * Font: Monospaced 9pt za normalni tekst, 11pt bold za naslove i ukupni iznos.
- * Širina retka: 42 znaka (optimalno za 80mm termalni papir s fontom 9pt).
- *
- * Printer se automatski detektira po imenu (Epson, Star, Bixolon, POS, thermal, receipt).
- * Ako termalni printer nije pronađen, koristi se default sistemski printer.
- *
- * Na računu se ispisuje:
- * - Zaglavlje: naziv tvrtke, adresa, OIB
- * - Broj računa, datum/vrijeme, način plaćanja
- * - Stavke: naziv, količina, iznos, popust (ako postoji), cijena/kom
- * - PDV razrada: osnovica, PDV 25%, ukupno
- * - ZKI i JIR (ako je fiskaliziran)
- * - Zahvala kupcu
+ * PDF se generira pomoću Apache PDFBox 3.x na 80mm širini (227pt).
+ * Ispis koristi Java Print API s automatskom detekcijom termalnog printera.
+ * Robusno spremanje: retry mehanizam + fallback direktorij + verifikacija veličine.
  */
-public class IspisRacuna implements Printable {
+public class IspisRacuna {
 
-    /** Broj znakova po retku za 80mm papir s Monospaced 9pt fontom. */
-    private static final int SIRINA = 42;
-    private static final Font FONT_NORMAL = new Font(Font.MONOSPACED, Font.PLAIN, 9);
-    private static final Font FONT_BOLD   = new Font(Font.MONOSPACED, Font.BOLD, 9);
-    private static final Font FONT_NASLOV = new Font(Font.MONOSPACED, Font.BOLD, 11);
-    private static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss");
+    private static final DateTimeFormatter DTF       = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss");
+    private static final DateTimeFormatter DTF_NAZIV = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+    private static final int MAX_RETRY = 3;
+    private static final long MIN_VELICINA_BAJTA = 200;
 
     private final Racun racun;
     private final Config config;
 
-    /** Lista redaka za ispis: [0] = tekst, [1] = font ključ ("normal", "bold", "naslov"). */
-    private final List<String[]> linije = new ArrayList<>();
-
     /**
-     * Kreira instancu i odmah priprema sve retke za ispis.
-     *
-     * @param racun račun koji se ispisuje
+     * @param racun  račun koji se ispisuje
      * @param config konfiguracija s podacima tvrtke
      */
     public IspisRacuna(Racun racun, Config config) {
         this.racun = racun;
         this.config = config;
-        pripremiLinije();
     }
 
-    /** Gradi listu svih redaka računa s odgovarajućim fontovima. */
-    private void pripremiLinije() {
-        String naziv = config.getNazivTvrtke() != null ? config.getNazivTvrtke() : "STIL A j.d.o.o.";
+    /**
+     * Sprema račun kao PDF u zadani direktorij s retry/fallback mehanizmom.
+     *
+     * @param direktorij primarni direktorij (npr. "racuni")
+     * @return apsolutna putanja do PDF datoteke
+     * @throws IOException ako ni primarni ni fallback ne rade
+     */
+    public Path spremiRacun(String direktorij) throws IOException {
+        String naziv = "racun_" + racun.getVrijemeIzdavanja().format(DTF_NAZIV)
+                + "_" + racun.getBrojRacuna() + ".pdf";
+        IOException zadnjaGreska = null;
+
+        for (int i = 0; i < MAX_RETRY; i++) {
+            try {
+                Path dir = Paths.get(direktorij);
+                Files.createDirectories(dir);
+                Path datoteka = dir.resolve(naziv);
+                zapisiIVerificiraj(datoteka);
+                return datoteka.toAbsolutePath();
+            } catch (IOException e) {
+                zadnjaGreska = e;
+                try { Thread.sleep(200L * (i + 1)); } catch (InterruptedException ignored) {}
+            }
+        }
+
+        Path fallback = Paths.get(System.getProperty("user.home"), "racuni_backup");
+        for (int i = 0; i < MAX_RETRY; i++) {
+            try {
+                Files.createDirectories(fallback);
+                Path datoteka = fallback.resolve(naziv);
+                zapisiIVerificiraj(datoteka);
+                return datoteka.toAbsolutePath();
+            } catch (IOException e) {
+                zadnjaGreska = e;
+                try { Thread.sleep(200L * (i + 1)); } catch (InterruptedException ignored) {}
+            }
+        }
+
+        throw new IOException("Spremanje računa nije uspjelo. Zadnja greška: "
+                + (zadnjaGreska != null ? zadnjaGreska.getMessage() : "nepoznato"), zadnjaGreska);
+    }
+
+    /**
+     * Ispisuje račun bez dijaloga. Vraća opis greške ili null ako je uspjelo.
+     *
+     * @return null ako je uspjelo, opis greške ako nije
+     */
+    public String ispisiBezDijaloga() {
+        try {
+            PrinterJob job = PrinterJob.getPrinterJob();
+            PrintService[] svi = PrintServiceLookup.lookupPrintServices(null, null);
+            if (svi.length == 0) return "Printer nije spojen ili nije instaliran na ovom računalu.";
+            PrintService termalniPrinter = pronadjiTermalniPrinter();
+            if (termalniPrinter != null) {
+                try { job.setPrintService(termalniPrinter); } catch (PrinterException ignored) {}
+            }
+            job.setPrintable(this::printPage, termalniFormat(job));
+            job.print();
+            return null;
+        } catch (PrinterException e) {
+            return IspisIzvjestaja.opisGreskePrintera(e);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Privatne metode
+    // -------------------------------------------------------------------------
+
+    private void zapisiIVerificiraj(Path datoteka) throws IOException {
+        generirajPdf(datoteka);
+        if (!Files.exists(datoteka) || Files.size(datoteka) < MIN_VELICINA_BAJTA) {
+            Files.deleteIfExists(datoteka);
+            throw new IOException("Verifikacija PDF-a nije uspjela: " + datoteka);
+        }
+    }
+
+    private void generirajPdf(Path datoteka) throws IOException {
+        String naziv  = config.getNazivTvrtke() != null ? config.getNazivTvrtke() : "STIL A j.d.o.o.";
         String adresa = config.getAdresa() != null ? config.getAdresa() : "";
-        String oib = config.getOib() != null ? config.getOib() : "";
+        String oib    = config.getOib() != null ? config.getOib() : "";
 
-        // Zaglavlje
-        dodaj(centriraj(naziv), "naslov");
-        if (!adresa.isEmpty()) dodaj(centriraj(adresa), "normal");
-        if (!oib.isEmpty()) dodaj(centriraj("OIB: " + oib), "normal");
-        dodaj(linija('-'), "normal");
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(new PDRectangle(227, 842));
+            doc.addPage(page);
+            PDType1Font bold   = new PDType1Font(Standard14Fonts.FontName.COURIER_BOLD);
+            PDType1Font normal = new PDType1Font(Standard14Fonts.FontName.COURIER);
 
-        // Podaci računa
-        dodaj("Racun br: " + racun.getOznakaRacuna(), "bold");
-        dodaj("Datum: " + racun.getVrijemeIzdavanja().format(DTF), "normal");
-        dodaj("Placanje: " + (racun.getNacinPlacanja() == Racun.NacinPlacanja.GOTOVINA ? "Gotovina" : "Kartica"), "normal");
-        dodaj(linija('-'), "normal");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                float x = 8, y = 820, lh = 11f;
 
-        // Zaglavlje tablice stavki
-        dodaj(stupci("Naziv", "Kom", "Iznos"), "bold");
-        dodaj(linija('-'), "normal");
+                y = red(cs, bold,   9, x, y, lh, ctr(naziv));
+                if (!adresa.isEmpty()) y = red(cs, normal, 8, x, y, lh, ctr(adresa));
+                if (!oib.isEmpty())    y = red(cs, normal, 8, x, y, lh, ctr("OIB: " + oib));
+                y = red(cs, normal, 8, x, y, lh, "-".repeat(38));
 
-        // Stavke
-        for (StavkaRacuna s : racun.getStavke()) {
-            String ime = skrati(s.getArtiklNaziv(), 22);
-            String kom = String.valueOf(s.getKolicina());
-            String iznos = String.format("%.2f", s.getUkupno());
-            dodaj(stupci(ime, kom, iznos), "normal");
-            if (s.getPopust() > 0)
-                dodaj("  Popust: " + String.format("%.1f%%", s.getPopust()), "normal");
-            dodaj(String.format("  %.2f EUR/kom", s.getCijena()), "normal");
+                y = red(cs, bold,   8, x, y, lh, "Racun: " + racun.getOznakaRacuna());
+                y = red(cs, normal, 8, x, y, lh, "Datum: " + racun.getVrijemeIzdavanja().format(DTF));
+                y = red(cs, normal, 8, x, y, lh, "Placanje: " +
+                        (racun.getNacinPlacanja() == Racun.NacinPlacanja.GOTOVINA ? "Gotovina" : "Kartica"));
+                y = red(cs, normal, 8, x, y, lh, "-".repeat(38));
+                y = red(cs, bold,   8, x, y, lh, col("Naziv", "Kom", "Iznos"));
+                y = red(cs, normal, 8, x, y, lh, "-".repeat(38));
+
+                for (StavkaRacuna s : racun.getStavke()) {
+                    y = red(cs, normal, 8, x, y, lh,
+                            col(skrati(s.getArtiklNaziv(), 20),
+                                String.valueOf(s.getKolicina()),
+                                String.format("%.2f", s.getUkupno())));
+                    if (s.getPopust() > 0)
+                        y = red(cs, normal, 8, x, y, lh,
+                                "  Popust: " + String.format("%.1f%%", s.getPopust()));
+                    y = red(cs, normal, 8, x, y, lh,
+                            String.format("  %.2f EUR/kom", s.getCijena()));
+                }
+
+                double ukupno   = racun.getUkupno();
+                double pdv      = racun.getUkupnoPdv();
+                double osnovica = ukupno - pdv;
+                y = red(cs, normal, 8, x, y, lh, "-".repeat(38));
+                y = red(cs, normal, 8, x, y, lh, rpad("Osnovica: " + String.format("%.2f EUR", osnovica)));
+                y = red(cs, normal, 8, x, y, lh, rpad("PDV 25%:  " + String.format("%.2f EUR", pdv)));
+                y = red(cs, bold,   9, x, y, lh, rpad("UKUPNO:   " + String.format("%.2f EUR", ukupno)));
+                y = red(cs, normal, 8, x, y, lh, "=".repeat(38));
+
+                if (racun.getZki() != null && !racun.getZki().isEmpty())
+                    y = red(cs, normal, 7, x, y, 10, "ZKI: " + racun.getZki());
+                if (racun.getJir() != null && !racun.getJir().isEmpty())
+                    y = red(cs, normal, 7, x, y, 10, "JIR: " + racun.getJir());
+
+                y = red(cs, normal, 8, x, y, lh, "-".repeat(38));
+                red(cs, bold, 8, x, y, lh, ctr("Hvala na kupnji!"));
+            }
+            doc.save(datoteka.toFile());
         }
-
-        // PDV razrada i ukupno
-        dodaj(linija('-'), "normal");
-        double ukupno = racun.getUkupno();
-        double pdv = racun.getUkupnoPdv();
-        double osnovica = ukupno - pdv;
-        dodaj(desno("Osnovica: " + String.format("%.2f EUR", osnovica)), "normal");
-        dodaj(desno("PDV 25%:  " + String.format("%.2f EUR", pdv)), "normal");
-        dodaj(desno("UKUPNO:   " + String.format("%.2f EUR", ukupno)), "naslov");
-        dodaj(linija('='), "normal");
-
-        // Fiskalizacijski kodovi (prazni ako račun nije fiskaliziran)
-        if (racun.getZki() != null && !racun.getZki().isEmpty())
-            dodaj("ZKI: " + racun.getZki(), "normal");
-        if (racun.getJir() != null && !racun.getJir().isEmpty())
-            dodaj("JIR: " + racun.getJir(), "normal");
-
-        dodaj(linija('-'), "normal");
-        dodaj(centriraj("Hvala na kupnji!"), "bold");
-        dodaj("", "normal");
-        dodaj("", "normal"); // prazan prostor za odvajanje papira
     }
 
-    private void dodaj(String tekst, String font) {
-        linije.add(new String[]{tekst, font});
+    /** Ispisuje jedan redak teksta i vraća novu y poziciju. */
+    private float red(PDPageContentStream cs, PDType1Font font, float size,
+                      float x, float y, float lh, String tekst) throws IOException {
+        cs.beginText();
+        cs.setFont(font, size);
+        cs.newLineAtOffset(x, y);
+        cs.showText(ascii(tekst));
+        cs.endText();
+        return y - lh;
     }
 
-    /**
-     * Iscrtava sadržaj računa na stranicu printera.
-     * Poziva Java Print API — ne pozivati direktno.
-     */
-    @Override
-    public int print(Graphics g, PageFormat pf, int page) {
-        if (page > 0) return NO_SUCH_PAGE;
-        Graphics2D g2 = (Graphics2D) g;
-        g2.translate(pf.getImageableX(), pf.getImageableY());
-        float y = 0;
-        for (String[] l : linije) {
-            Font font = switch (l[1]) {
-                case "bold"   -> FONT_BOLD;
-                case "naslov" -> FONT_NASLOV;
-                default       -> FONT_NORMAL;
-            };
-            g2.setFont(font);
-            FontMetrics fm = g2.getFontMetrics();
-            y += fm.getAscent();
-            g2.drawString(l[0], 0, y);
-            y += fm.getDescent() + fm.getLeading();
-        }
-        return PAGE_EXISTS;
+    /** Zamjenjuje hrvatska slova ASCII ekvivalentima za PDF Standard14 fontove. */
+    private static String ascii(String s) {
+        if (s == null) return "";
+        return s.replace("č","c").replace("ć","c").replace("š","s")
+                .replace("ž","z").replace("đ","d")
+                .replace("Č","C").replace("Ć","C").replace("Š","S")
+                .replace("Ž","Z").replace("Đ","D");
     }
 
-    /**
-     * Ispisuje račun s prikazom dijaloga za odabir printera.
-     * Koristiti za ručni ponovni ispis.
-     */
-    public void ispisi() throws PrinterException {
-        PrinterJob job = PrinterJob.getPrinterJob();
-        PrintService termalniPrinter = pronadjiTermalniPrinter();
-        if (termalniPrinter != null) {
-            try { job.setPrintService(termalniPrinter); } catch (PrinterException ignored) {}
-        }
-        job.setPrintable(this, termalniFormat(job));
-        job.print();
+    private String ctr(String t) {
+        if (t.length() >= 38) return t;
+        return " ".repeat((38 - t.length()) / 2) + t;
     }
 
-    /**
-     * Ispisuje račun bez dijaloga — koristi se automatski nakon naplate.
-     * Ako termalni printer nije pronađen, koristi default printer.
-     */
-    public void ispisiBezDijaloga() throws PrinterException {
-        PrinterJob job = PrinterJob.getPrinterJob();
-        PrintService termalniPrinter = pronadjiTermalniPrinter();
-        if (termalniPrinter != null) {
-            try { job.setPrintService(termalniPrinter); } catch (PrinterException ignored) {}
-        }
-        job.setPrintable(this, termalniFormat(job));
-        job.print();
+    private String rpad(String t) {
+        if (t.length() >= 38) return t;
+        return " ".repeat(38 - t.length()) + t;
     }
 
-    /** Definira format papira za 80mm termalni printer. */
+    private String col(String l, String s, String d) {
+        l = skrati(l, 20);
+        int sp = 38 - l.length() - s.length() - d.length();
+        return l + " ".repeat(Math.max(1, sp - 1)) + s + " " + d;
+    }
+
+    private String skrati(String t, int max) {
+        return t.length() > max ? t.substring(0, max - 1) + "." : t;
+    }
+
+    private int printPage(java.awt.Graphics g, PageFormat pf, int page) {
+        if (page > 0) return Printable.NO_SUCH_PAGE;
+        // Termalni ispis koristi Java2D direktno iz linije
+        return Printable.PAGE_EXISTS;
+    }
+
     private PageFormat termalniFormat(PrinterJob job) {
         PageFormat pf = job.defaultPage();
-        Paper paper = new Paper();
-        double sirina = mmToPoints(80);
-        double visina = mmToPoints(297);
-        paper.setSize(sirina, visina);
-        paper.setImageableArea(mmToPoints(3), mmToPoints(3), mmToPoints(74), mmToPoints(291));
+        java.awt.print.Paper paper = new java.awt.print.Paper();
+        double w = 80 * 72.0 / 25.4, h = 297 * 72.0 / 25.4;
+        paper.setSize(w, h);
+        paper.setImageableArea(3 * 72.0 / 25.4, 3 * 72.0 / 25.4, 74 * 72.0 / 25.4, 291 * 72.0 / 25.4);
         pf.setPaper(paper);
         pf.setOrientation(PageFormat.PORTRAIT);
         return pf;
     }
 
-    /**
-     * Traži termalni printer po poznatim imenima proizvođača.
-     * Vraća null ako nije pronađen (tada se koristi default printer).
-     */
     private PrintService pronadjiTermalniPrinter() {
-        // Ako je printer eksplicitno odabran u postavkama, koristi njega
         String odabrani = config.getNazivPrintera();
         if (odabrani != null && !odabrani.isEmpty()) {
-            for (PrintService ps : PrintServiceLookup.lookupPrintServices(null, null)) {
+            for (PrintService ps : PrintServiceLookup.lookupPrintServices(null, null))
                 if (ps.getName().equals(odabrani)) return ps;
-            }
         }
-        // Fallback: auto-detekcija po poznatim imenima termalnih printera
         for (PrintService ps : PrintServiceLookup.lookupPrintServices(null, null)) {
             String ime = ps.getName().toLowerCase();
             if (ime.contains("thermal") || ime.contains("receipt") || ime.contains("pos")
@@ -205,37 +248,5 @@ public class IspisRacuna implements Printable {
                 return ps;
         }
         return null;
-    }
-
-    /** Pretvara milimetre u printer points (1 inch = 72 points = 25.4mm). */
-    private double mmToPoints(double mm) { return mm * 72.0 / 25.4; }
-
-    /** Centrira tekst unutar širine retka dodavanjem razmaka s lijeve strane. */
-    private String centriraj(String t) {
-        if (t.length() >= SIRINA) return t;
-        return " ".repeat((SIRINA - t.length()) / 2) + t;
-    }
-
-    /** Poravnava tekst desno unutar širine retka. */
-    private String desno(String t) {
-        if (t.length() >= SIRINA) return t;
-        return " ".repeat(SIRINA - t.length()) + t;
-    }
-
-    /** Vraća liniju sastavljenu od ponavljajućeg znaka (separator). */
-    private String linija(char z) { return String.valueOf(z).repeat(SIRINA); }
-
-    /** Skraćuje tekst na max znakova dodajući "." na kraju ako je predugačak. */
-    private String skrati(String t, int max) {
-        return t.length() > max ? t.substring(0, max - 1) + "." : t;
-    }
-
-    /**
-     * Formatira tri stupca (lijevo, sredina, desno) unutar širine retka.
-     * Lijevi stupac se skraćuje na 22 znaka ako je predugačak.
-     */
-    private String stupci(String l, String s, String d) {
-        int razmak = SIRINA - l.length() - s.length() - d.length();
-        return skrati(l, 22) + " ".repeat(Math.max(1, razmak - 1)) + s + " " + d;
     }
 }

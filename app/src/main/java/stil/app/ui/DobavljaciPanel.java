@@ -35,8 +35,7 @@ public class DobavljaciPanel extends JPanel {
             public boolean isCellEditable(int r, int c) { return false; }
         };
         table = new JTable(tableModel);
-        table.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
-        table.setRowHeight(24);
+        table.setRowHeight(36);
         table.getColumnModel().getColumn(0).setMaxWidth(50);
         table.getColumnModel().getColumn(0).setMinWidth(50);
         table.getColumnModel().getColumn(1).setPreferredWidth(200);

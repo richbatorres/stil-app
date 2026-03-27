@@ -25,6 +25,7 @@ public class DobavljacForm extends JDialog {
     private final JTextField emailField    = new JTextField(25);
     private final JTextField telefonField  = new JTextField(25);
     private final JTextArea  napomenaArea  = new JTextArea(3, 25);
+    private final JCheckBox  komisijaCb    = new JCheckBox("Nudi komisijsku prodaju");
 
     private boolean saved = false;
     private final Dobavljac dobavljac;
@@ -46,6 +47,7 @@ public class DobavljacForm extends JDialog {
             emailField.setText(dobavljac.getEmail());
             telefonField.setText(dobavljac.getTelefon());
             napomenaArea.setText(dobavljac.getNapomena());
+            komisijaCb.setSelected(dobavljac.isKomisijskiModel());
         }
 
         JPanel form = new JPanel(new GridBagLayout());
@@ -60,6 +62,7 @@ public class DobavljacForm extends JDialog {
         addRow(form, gbc, 3, "Email:", emailField);
         addRow(form, gbc, 4, "Telefon:", telefonField);
         addRow(form, gbc, 5, "Napomena:", new JScrollPane(napomenaArea));
+        addRow(form, gbc, 6, "", komisijaCb);
 
         JButton spremiBtn   = new JButton("Spremi");
         JButton odustaniBtn = new JButton("Odustani");
@@ -99,6 +102,7 @@ public class DobavljacForm extends JDialog {
         dobavljac.setEmail(nullIfEmpty(emailField.getText()));
         dobavljac.setTelefon(nullIfEmpty(telefonField.getText()));
         dobavljac.setNapomena(nullIfEmpty(napomenaArea.getText()));
+        dobavljac.setKomisijskiModel(komisijaCb.isSelected());
 
         try {
             DatabaseManager.getInstance().saveDobavljac(dobavljac);

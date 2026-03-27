@@ -48,7 +48,6 @@ public class ProdajaPanel extends JPanel {
         lijevo.setBorder(BorderFactory.createTitledBorder("Artikli"));
 
         pretragaField = new JTextField();
-        pretragaField.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 14));
         pretragaField.setToolTipText("Pretraži po nazivu ili skeniraj barkod");
         lijevo.add(pretragaField, BorderLayout.NORTH);
 
@@ -56,15 +55,13 @@ public class ProdajaPanel extends JPanel {
             public boolean isCellEditable(int r, int c) { return false; }
         };
         JTable artiklTable = new JTable(artiklModel);
-        artiklTable.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
-        artiklTable.setRowHeight(24);
+        artiklTable.setRowHeight(32);
         artiklTable.getColumnModel().getColumn(0).setPreferredWidth(200);
         artiklTable.getColumnModel().getColumn(1).setPreferredWidth(70);
         artiklTable.getColumnModel().getColumn(2).setPreferredWidth(50);
         lijevo.add(new JScrollPane(artiklTable), BorderLayout.CENTER);
 
         JButton dodajBtn = new JButton("Dodaj u košaricu");
-        dodajBtn.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
         lijevo.add(dodajBtn, BorderLayout.SOUTH);
 
         // --- DESNO: košarica ---
@@ -75,8 +72,7 @@ public class ProdajaPanel extends JPanel {
             public boolean isCellEditable(int r, int c) { return c == 1 || c == 3; }
         };
         JTable kosaricaTable = new JTable(kosariceModel);
-        kosaricaTable.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
-        kosaricaTable.setRowHeight(24);
+        kosaricaTable.setRowHeight(32);
         desno.add(new JScrollPane(kosaricaTable), BorderLayout.CENTER);
 
         JPanel bottomPanel = new JPanel(new GridBagLayout());
@@ -85,15 +81,12 @@ public class ProdajaPanel extends JPanel {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         ukupnoLabel = new JLabel("Ukupno: 0,00 EUR");
-        ukupnoLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 18));
 
         nacinPlacanjaBox = new JComboBox<>(new String[]{"GOTOVINA", "KARTICA"});
-        nacinPlacanjaBox.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 14));
 
         JButton ukloniBtn = new JButton("Ukloni stavku");
         JButton ocistiBtn = new JButton("Očisti");
         JButton naплatiBtn = new JButton("NAPLATI");
-        naплatiBtn.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 16));
 
         gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
         bottomPanel.add(ukupnoLabel, gbc);
@@ -300,13 +293,25 @@ public class ProdajaPanel extends JPanel {
                 }
             }
 
-            // Ispis
+            // Spremi račun u PDF datoteku (obavezno — alarm ako ne uspije)
+            IspisRacuna ispis = new IspisRacuna(racun, config);
             try {
-                new IspisRacuna(racun, config).ispisiBezDijaloga();
+                ispis.spremiRacun("racuni");
             } catch (Exception ex) {
                 JOptionPane.showMessageDialog(this,
-                    "Racun je spremljen, ali ispis nije uspio: " + ex.getMessage(),
-                    "Upozorenje", JOptionPane.WARNING_MESSAGE);
+                    "KRITIČNA GREŠKA: Račun nije mogao biti spremljen!\n\n" +
+                    "Razlog: " + ex.getMessage() + "\n\n" +
+                    "Molimo kontaktirajte tehničku podršku.",
+                    "Greška spremanja računa", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            // Ispis (neobavezno — alarm ako ne uspije, ali račun je već spremljen)
+            String ispisGreska = ispis.ispisiBezDijaloga();
+            if (ispisGreska != null) {
+                JOptionPane.showMessageDialog(this,
+                    "Račun je uspješno spremljen.\n\nIspis nije moguć.\nRazlog: " + ispisGreska,
+                    "Ispis nije uspio", JOptionPane.WARNING_MESSAGE);
             }
 
             kosarica.clear();
